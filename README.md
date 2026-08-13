@@ -19,8 +19,10 @@ No build step. No framework. Open `index.html` (preferably via a tiny local serv
 - **Images in the transcript** — Grok can generate pictures via Imagine (`generate_image`) or display existing URLs (`show_image`). Tap to enlarge.
 - **Daily query count** in the header (spoken or typed turns; resets at local midnight)
 - **Say “Grok”** to start; a **3:00** timer on the top keeps the session online at least 3 minutes
-- Site **version** in the header (`v1.5.0`)
+- Site **version** in the header (`v1.5.1`)
 - **Read aloud** via [Kokoro TTS](https://secondbrain-kokoro.fly.dev/voices) (`POST /api/speak`) — per-bubble Read, Read last, or auto-read Grok replies
+- Live **Kokoro API call** preview (copy as curl)
+- Settings saved in a **cookie** (`grok-voice-settings`) plus localStorage
 - Voice picker (`eve`, `ara`, `rex`, `leo`, …)
 - Volume slider, speaker mute, mic mute
 - Server-side **web search** and **X search** tools

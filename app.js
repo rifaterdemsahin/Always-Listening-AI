@@ -20,7 +20,9 @@ const MODEL = "grok-voice-latest";
 const CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets";
 const IMAGES_URL = "https://api.x.ai/v1/images/generations";
 const IMAGE_MODEL = "grok-imagine-image-2.0";
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
+const SETTINGS_COOKIE = "grok-voice-settings";
+const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 const KOKORO_BASE = "https://secondbrain-kokoro.fly.dev";
 const KOKORO_VOICES_FALLBACK = [
   { id: "af_heart", name: "American Female — Heart" },
@@ -124,13 +126,86 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function cookiePath() {
+  return location.pathname.indexOf("/Always-Listening-AI") === 0 ? "/Always-Listening-AI/" : "/";
+}
+
+function readCookie(name) {
+  const prefix = `${name}=`;
+  const parts = document.cookie.split("; ");
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].indexOf(prefix) === 0) {
+      try {
+        return decodeURIComponent(parts[i].slice(prefix.length));
+      } catch {
+        return "";
+      }
+    }
+  }
+  return "";
+}
+
+function writeCookie(name, value) {
+  const secure = location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${COOKIE_MAX_AGE}; Path=${cookiePath()}; SameSite=Lax${secure}`;
+}
+
+function loadSettingsBag() {
+  try {
+    const raw = readCookie(SETTINGS_COOKIE);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore bad cookie */ }
+  try {
+    const raw = localStorage.getItem(SETTINGS_COOKIE);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveSettingsBag(partial) {
+  const bag = Object.assign(loadSettingsBag(), partial);
+  const json = JSON.stringify(bag);
+  try {
+    localStorage.setItem(SETTINGS_COOKIE, json);
+  } catch { /* quota */ }
+  try {
+    writeCookie(SETTINGS_COOKIE, json);
+  } catch { /* cookie blocked */ }
+}
+
 function load(key, fallback) {
+  const bag = loadSettingsBag();
+  if (Object.prototype.hasOwnProperty.call(bag, key) && bag[key] !== null && bag[key] !== undefined) {
+    return String(bag[key]);
+  }
   const value = localStorage.getItem(key);
   return value === null ? fallback : value;
 }
 
 function save(key, value) {
-  localStorage.setItem(key, value);
+  try {
+    localStorage.setItem(key, value);
+  } catch { /* quota */ }
+  saveSettingsBag({ [key]: value });
+}
+
+function formatKokoroCall(text, voice, speed) {
+  const body = {
+    text: String(text || "Hello from Grok Voice.").slice(0, 5000),
+    voice: voice || "af_heart",
+    speed: Number(speed) || 1,
+  };
+  return {
+    url: `${KOKORO_BASE}/api/speak`,
+    method: "POST",
+    body,
+    curl: [
+      `curl -X POST ${KOKORO_BASE}/api/speak \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '${JSON.stringify(body)}' \\`,
+      `  --output speech.mp3`,
+    ].join("\n"),
+  };
 }
 
 function floatToPcm16(float32) {
@@ -1299,19 +1374,19 @@ class KokoroReader {
     if (!clean) return { error: "Nothing to read." };
 
     this.stop();
-    const response = await fetch(`${KOKORO_BASE}/api/speak`, {
-      method: "POST",
+    const call = formatKokoroCall(clean, voice, speed);
+    const response = await fetch(call.url, {
+      method: call.method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: clean.slice(0, 5000),
-        voice: voice || "af_heart",
-        speed: Number(speed) || 1,
-      }),
+      body: JSON.stringify(call.body),
     });
 
     if (!response.ok) {
       const raw = await response.text();
-      throw new Error(raw.slice(0, 180) || `Kokoro ${response.status}`);
+      const err = new Error(raw.slice(0, 180) || `Kokoro ${response.status}`);
+      err.call = call;
+      err.status = response.status;
+      throw err;
     }
 
     const blob = await response.blob();
@@ -1319,7 +1394,7 @@ class KokoroReader {
     this.audio.src = this.objectUrl;
     this.playing = true;
     await this.audio.play();
-    return { ok: true };
+    return { ok: true, call, status: response.status, bytes: blob.size };
   }
 }
 
@@ -1691,10 +1766,26 @@ class App {
         id,
         name: (raw[id] && (raw[id].name || raw[id].Name)) || id,
       }));
-      if (list.length) this.fillKokoroVoices(list);
+      if (list.length) {
+        this.fillKokoroVoices(list);
+        this.showKokoroCall("Hello from Grok Voice.");
+      }
     } catch (err) {
       console.warn("Kokoro /voices failed, using built-in list:", err);
     }
+  }
+
+  showKokoroCall(text, extra) {
+    const call = formatKokoroCall(text, $("kokoro-voice").value, $("kokoro-speed").value);
+    const lines = [
+      `${call.method} ${call.url}`,
+      "Content-Type: application/json",
+      JSON.stringify(call.body, null, 2),
+    ];
+    if (extra) lines.push("", extra);
+    $("kokoro-call").textContent = lines.join("\n");
+    this._lastKokoroCurl = call.curl;
+    return call;
   }
 
   async readAloud(text) {
@@ -1704,9 +1795,14 @@ class App {
       return;
     }
     this.speaker.stop();
+    this.showKokoroCall(clean, "Sending…");
     try {
-      await this.kokoro.speak(clean, $("kokoro-voice").value, $("kokoro-speed").value);
+      const result = await this.kokoro.speak(clean, $("kokoro-voice").value, $("kokoro-speed").value);
+      this.showKokoroCall(clean, `HTTP ${result.status} · ${result.bytes} bytes audio/mpeg`);
+      this.transcript.tool(`Kokoro POST /api/speak · ${$("kokoro-voice").value} · HTTP ${result.status}`);
     } catch (err) {
+      this.showKokoroCall(clean, `Failed: ${err.message || err}`);
+      this.transcript.tool(`Kokoro API error: ${err.message || err}`);
       this.toast(`Read aloud failed: ${err.message || err}`);
     }
   }
@@ -1798,6 +1894,7 @@ class App {
     $("app-version").textContent = `v${APP_VERSION}`;
     this.fillKokoroVoices(KOKORO_VOICES_FALLBACK);
     this.loadKokoroVoices();
+    this.showKokoroCall("Hello from Grok Voice.");
     this.renderUsage();
     this.renderSessionTimer();
     $("volume").value = load(STORAGE.volume, "90");
@@ -1856,6 +1953,7 @@ class App {
     $("forget-key").addEventListener("click", () => {
       $("api-key").value = "";
       localStorage.removeItem(STORAGE.key);
+      save(STORAGE.key, "");
       this.toast("API key removed from this browser.");
     });
 
@@ -1868,6 +1966,17 @@ class App {
 
     $("kokoro-speed").addEventListener("input", (event) => {
       $("kokoro-speed-readout").textContent = `${Number(event.target.value).toFixed(2)}×`;
+      this.showKokoroCall("Hello from Grok Voice.");
+    });
+    $("kokoro-voice").addEventListener("change", () => this.showKokoroCall("Hello from Grok Voice."));
+    $("copy-kokoro-call").addEventListener("click", async () => {
+      const text = this._lastKokoroCurl || $("kokoro-call").textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast("Kokoro curl copied.");
+      } catch {
+        this.toast("Could not copy. Select the API box instead.");
+      }
     });
     $("read-last").addEventListener("click", () => this.readLast());
     $("stop-read").addEventListener("click", () => this.kokoro.stop());

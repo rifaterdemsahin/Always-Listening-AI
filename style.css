@@ -451,6 +451,40 @@ textarea:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+.api-call-wrap {
+  width: 100%;
+  margin-top: 10px;
+  background: #070a10;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.api-call-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.api-call {
+  margin: 0;
+  padding: 10px 12px 12px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #c6f7df;
+}
+
 .voice-row label:not(.toggle) {
   color: var(--muted);
   font-weight: 600;

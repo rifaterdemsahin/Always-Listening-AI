@@ -21,7 +21,7 @@
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <div class="brand-copy">
-          <h1>Grok Voice <span class="version" id="app-version">v1.5.0</span></h1>
+          <h1>Grok Voice <span class="version" id="app-version">v1.5.1</span></h1>
           <p>Always-listening speech-to-speech</p>
         </div>
       </div>
@@ -99,6 +99,13 @@
           <label for="kokoro-voice">Kokoro</label>
           <select id="kokoro-voice"></select>
         </div>
+        <div class="api-call-wrap">
+          <div class="api-call-head">
+            <span>Kokoro API</span>
+            <button type="button" class="text-btn" id="copy-kokoro-call">Copy curl</button>
+          </div>
+          <pre class="api-call" id="kokoro-call" aria-live="polite"></pre>
+        </div>
       </section>
 
       <section class="transcript-panel" aria-label="Conversation transcript">
@@ -132,7 +139,7 @@
             <input type="password" id="api-key" placeholder="xai-…" autocomplete="off" spellcheck="false" />
             <button type="button" class="pill-btn" id="toggle-key" aria-pressed="false">Show</button>
           </div>
-          <small>Stored only in this browser’s localStorage. Never committed to git.</small>
+          <small>Saved in a cookie and localStorage on this device. Never committed to git.</small>
         </label>
 
         <label class="field">
