@@ -18,6 +18,8 @@ No build step. No framework. Open `index.html` (preferably via a tiny local serv
 - Conversation transcript (live user captions + Grok text)
 - **Images in the transcript** — Grok can generate pictures via Imagine (`generate_image`) or display existing URLs (`show_image`). Tap to enlarge.
 - **Daily query count** in the header (spoken or typed turns; resets at local midnight)
+- **Say “Grok”** to start; a **3:00** timer on the top keeps the session online at least 3 minutes
+- Site **version** in the header (`v1.4.0`)
 - Voice picker (`eve`, `ara`, `rex`, `leo`, …)
 - Volume slider, speaker mute, mic mute
 - Server-side **web search** and **X search** tools

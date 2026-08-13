@@ -139,6 +139,16 @@ a {
   margin: 0;
   font-size: 1.15rem;
   letter-spacing: -0.02em;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.version {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--faint);
 }
 
 .brand-copy p {
@@ -208,6 +218,22 @@ a {
   color: var(--mint);
   font-weight: 800;
   font-size: 1.02rem;
+}
+
+.timer-chip {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  min-width: 92px;
+  justify-content: center;
+}
+
+.timer-chip[data-state="hold"] {
+  border-color: rgba(61, 255, 176, 0.35);
+  color: var(--mint);
+}
+
+.timer-chip[data-state="online"] {
+  border-color: var(--line-strong);
 }
 
 .icon-btn,

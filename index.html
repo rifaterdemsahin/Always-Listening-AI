@@ -21,11 +21,14 @@
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <div class="brand-copy">
-          <h1>Grok Voice</h1>
+          <h1>Grok Voice <span class="version" id="app-version">v1.4.0</span></h1>
           <p>Always-listening speech-to-speech</p>
         </div>
       </div>
       <div class="topbar-actions">
+        <div class="status-chip timer-chip" id="session-chip" title="Say Grok to start. Stays online at least 3 minutes.">
+          <span id="session-timer">Say Grok</span>
+        </div>
         <div class="status-chip usage-chip" id="query-chip" title="Spoken or typed turns today. Resets at local midnight.">
           <span class="query-num" id="query-count">0</span>
           <span>today</span>
@@ -46,7 +49,7 @@
     <main class="layout">
       <section class="stage" aria-label="Listen control">
         <p class="phase-label" id="phase-label">Ready when you are</p>
-        <p class="phase-hint" id="phase-hint">Paste an xAI API key, then tap Start Listening.</p>
+        <p class="phase-hint" id="phase-hint">Say “Grok” to start, or tap the button. Stays online 3 minutes.</p>
 
         <div class="orb-wrap">
           <canvas id="viz" width="360" height="360" aria-hidden="true"></canvas>
@@ -171,7 +174,7 @@
         </li>
         <li>Open <strong>Settings</strong> and paste the key. It stays on this device.</li>
         <li>Use wired or Bluetooth headphones if you can — the Deck speakers will otherwise echo into the mic.</li>
-        <li>Tap the big <strong>Start Listening</strong> button and allow the microphone prompt.</li>
+        <li>Say <strong>Grok</strong> (or tap Start Listening) and allow the microphone prompt. The session stays online at least 3 minutes.</li>
         <li>Speak naturally. Server-side VAD detects when you start and stop. Interrupt Grok anytime.</li>
         <li>Ask Grok to <strong>show</strong> or <strong>generate</strong> a picture — it appears in the transcript. Tap it to enlarge.</li>
       </ol>

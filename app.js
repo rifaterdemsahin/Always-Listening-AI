@@ -20,6 +20,8 @@ const MODEL = "grok-voice-latest";
 const CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets";
 const IMAGES_URL = "https://api.x.ai/v1/images/generations";
 const IMAGE_MODEL = "grok-imagine-image-2.0";
+const APP_VERSION = "1.4.0";
+const SESSION_MIN_MS = 3 * 60 * 1000;
 const SAMPLE_RATE = 24000;
 const FRAME_MS = 100;
 const MAX_RECONNECT_DELAY_MS = 15000;
@@ -89,7 +91,7 @@ const VOICES = [
 ];
 
 const PHASE_COPY = {
-  idle: ["Ready when you are", "Paste an xAI API key, then tap Start Listening."],
+  idle: ["Say “Grok” to start", "Wake word is Grok. Session stays online at least 3 minutes."],
   connecting: ["Connecting to Grok…", "Requesting microphone and opening the realtime socket."],
   listening: ["Listening", "Speak naturally. Grok waits for a pause, then answers."],
   user: ["Hearing you", "Server-side VAD detected speech."],
@@ -165,6 +167,13 @@ function resampleLinear(input, fromRate, toRate) {
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function wantsImage(text) {
@@ -543,6 +552,8 @@ class RealtimeSession {
     this._earlyAudio = [];
     this._lastUserText = "";
     this._imageHandled = false;
+    this._lastImageKey = "";
+    this._lastImageAt = 0;
   }
 
   send(payload) {
@@ -793,11 +804,15 @@ class RealtimeSession {
    * detect the request, cancel the refusal, and generate on-screen.
    */
   fulfillImageRequest(userText, final) {
-    if (this._imageHandled || !$("tool-images").checked) return false;
+    if (!$("tool-images").checked) return false;
     if (!wantsImage(userText)) return false;
     const prompt = imagePromptFrom(userText);
     if (!final && prompt.length < 8) return false;
+    const key = prompt.toLowerCase();
+    if (this._lastImageKey === key && Date.now() - this._lastImageAt < 20000) return false;
     this._imageHandled = true;
+    this._lastImageKey = key;
+    this._lastImageAt = Date.now();
     this.app.speaker.stop();
     this.send({ type: "response.cancel" });
     this.app.setPhase("thinking");
@@ -815,6 +830,10 @@ class RealtimeSession {
         });
         return;
       }
+      this.app.transcript.tool(`Image error: ${(result && result.error) || "unknown"}`);
+      this.app.setPhase("listening");
+    }).catch((err) => {
+      this.app.transcript.tool(`Image error: ${err.message || err}`);
       this.app.setPhase("listening");
     });
     return true;
@@ -865,7 +884,6 @@ class RealtimeSession {
         this.app.speaker.stop();
         this.app.setPhase("user");
         this.app.transcript.begin("user");
-        this._imageHandled = false;
         break;
 
       case "input_audio_buffer.speech_stopped":
@@ -1039,6 +1057,7 @@ class TranscriptView {
   constructor(root) {
     this.root = root;
     this.live = { user: null, assistant: null };
+    this._lastFinalUser = "";
   }
 
   begin(role) {
@@ -1054,10 +1073,21 @@ class TranscriptView {
 
   update(role, text, interim) {
     if (!text) return;
+    if (role === "user" && !interim && this._lastFinalUser === text) {
+      if (this.live.user) {
+        this.live.user.querySelector(".body").textContent = text;
+        this.live.user.classList.remove("interim");
+        this.live.user = null;
+      }
+      return;
+    }
     const el = this.begin(role);
     el.querySelector(".body").textContent = text;
     el.classList.toggle("interim", Boolean(interim));
-    if (!interim) this.live[role] = null;
+    if (!interim) {
+      if (role === "user") this._lastFinalUser = text;
+      this.live[role] = null;
+    }
     this._scroll();
   }
 
@@ -1130,6 +1160,7 @@ class TranscriptView {
   clear() {
     this.root.innerHTML = "";
     this.live = { user: null, assistant: null };
+    this._lastFinalUser = "";
   }
 
   _scroll() {
@@ -1223,7 +1254,12 @@ class App {
   constructor() {
     this.phase = "idle";
     this.active = false;
+    this._starting = false;
     this.wakeLock = null;
+    this.holdUntil = 0;
+    this._wake = null;
+    this._wakeWanted = false;
+    this._timerTick = 0;
     this.speaker = new Speaker();
     this.session = new RealtimeSession(this);
     this.transcript = new TranscriptView($("transcript"));
@@ -1267,27 +1303,34 @@ class App {
   }
 
   async start() {
-    if (this.active) return;
+    if (this.active || this._starting) return;
     if (!this.apiKey()) {
       this.openSettings();
       this.toast("Paste your xAI API key to start.");
       return;
     }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("This browser cannot access the microphone. Use Chromium over http://localhost.");
+    this._starting = true;
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("This browser cannot access the microphone. Use Chromium over http://localhost.");
+      }
+
+      this.active = true;
+      this.stopWakeWord();
+      this.holdUntil = Date.now() + SESSION_MIN_MS;
+      this.renderSessionTimer();
+      $("listen-btn").setAttribute("aria-pressed", "true");
+      $("listen-text").textContent = "Stop";
+      this.setPhase("connecting");
+      this.viz.start();
+
+      // AudioContext must be created inside the click handler (Safari / some Deck browsers).
+      await this.speaker.ensure();
+      await Promise.all([this.mic.start(), this.session.connect()]);
+      await this._requestWakeLock();
+    } finally {
+      this._starting = false;
     }
-
-    this.active = true;
-    $("listen-btn").setAttribute("aria-pressed", "true");
-    $("listen-text").textContent = "Stop";
-    this.setPhase("connecting");
-    this.viz.start();
-
-    // AudioContext must be created inside the click handler (Safari / some Deck browsers).
-    await this.speaker.ensure();
-
-    await Promise.all([this.mic.start(), this.session.connect()]);
-    await this._requestWakeLock();
   }
 
   async stop() {
@@ -1299,7 +1342,78 @@ class App {
     this._releaseWakeLock();
     $("listen-btn").setAttribute("aria-pressed", "false");
     $("listen-text").textContent = "Start Listening";
+    this.holdUntil = 0;
     this.setPhase("idle");
+    this.renderSessionTimer();
+    this.startWakeWord();
+  }
+
+  sessionHoldRemaining() {
+    if (!this.active) return 0;
+    return Math.max(0, this.holdUntil - Date.now());
+  }
+
+  renderSessionTimer() {
+    const el = $("session-timer");
+    const chip = $("session-chip");
+    if (!this.active) {
+      el.textContent = "Say Grok";
+      chip.dataset.state = "idle";
+      chip.title = "Say Grok to start. Stays online at least 3 minutes.";
+      return;
+    }
+    const left = this.sessionHoldRemaining();
+    if (left > 0) {
+      el.textContent = formatClock(left);
+      chip.dataset.state = "hold";
+      chip.title = `Guaranteed online for ${formatClock(left)} more`;
+    } else {
+      el.textContent = "Online";
+      chip.dataset.state = "online";
+      chip.title = "Past the 3-minute minimum. Still listening.";
+    }
+  }
+
+  startWakeWord() {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Rec || this.active || this._wake) return;
+    const rec = new Rec();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.onresult = (event) => {
+      if (this.active || this._starting) return;
+      let text = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        text += event.results[i][0].transcript || "";
+      }
+      if (!/\bgrok\b/i.test(text)) return;
+      this.toggle().catch((err) => this.fail(err));
+    };
+    rec.onend = () => {
+      this._wake = null;
+      if (this._wakeWanted && !this.active) {
+        setTimeout(() => this.startWakeWord(), 250);
+      }
+    };
+    rec.onerror = () => {};
+    this._wake = rec;
+    this._wakeWanted = true;
+    try {
+      rec.start();
+    } catch {
+      this._wake = null;
+    }
+  }
+
+  stopWakeWord() {
+    this._wakeWanted = false;
+    if (!this._wake) return;
+    try {
+      this._wake.onend = null;
+      this._wake.stop();
+    } catch { /* already stopped */ }
+    this._wake = null;
   }
 
   async toggle() {
@@ -1330,6 +1444,9 @@ class App {
         this.applySpeakerMute(Boolean(args.muted));
         return { muted: Boolean(args.muted) };
       case "stop_listening":
+        if (this.sessionHoldRemaining() > 0) {
+          return { stopped: false, reason: "Session has a 3-minute minimum. Still online." };
+        }
         setTimeout(() => this.stop(), 400);
         return { stopped: true };
       case "generate_image":
@@ -1366,54 +1483,79 @@ class App {
 
     const aspect = String(args.aspect_ratio || "1:1").trim() || "1:1";
     const caption = String(args.caption || prompt).trim();
-    const models = [IMAGE_MODEL, "grok-imagine-image-quality", "grok-imagine-image"];
-    let lastError = "Image API returned no image data.";
 
-    for (const model of models) {
-      const response = await fetch(IMAGES_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          prompt,
-          n: 1,
-          aspect_ratio: aspect,
-          response_format: "b64_json",
-        }),
-      });
-
-      const raw = await response.text();
-      let data = {};
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch {
-        data = { error: raw.slice(0, 180) };
+    try {
+      const xai = await this._generateViaXai(prompt, aspect);
+      if (xai) {
+        this.transcript.addImages([{ src: xai.src, caption }]);
+        this.noteImage();
+        return { shown: true, caption, model: xai.model };
       }
-
-      if (!response.ok) {
-        lastError = (data.error && data.error.message) || data.error || raw.slice(0, 180) || `HTTP ${response.status}`;
-        continue;
-      }
-
-      const item = (data.data && data.data[0]) || data;
-      const b64 = item.b64_json || item.b64 || "";
-      const url = item.url || "";
-      const src = b64 ? `data:image/jpeg;base64,${b64}` : url;
-      if (!src) {
-        lastError = "Image API returned no image data.";
-        continue;
-      }
-
-      this.transcript.addImages([{ src, caption }]);
-      this.noteImage();
-      return { shown: true, caption, model };
+    } catch (err) {
+      console.warn("xAI Imagine failed:", err);
     }
 
-    this.toast(`Image failed: ${lastError}`);
-    return { error: String(lastError) };
+    // Browsers on GitHub Pages usually cannot POST to api.x.ai (CORS).
+    // Fall back to a prompt-to-image URL the <img> tag can load directly.
+    const fallback = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=768&nologo=true&model=flux`;
+    try {
+      await this._waitForImage(fallback, 28000);
+      this.transcript.addImages([{ src: fallback, caption: caption || prompt }]);
+      this.noteImage();
+      return { shown: true, caption, model: "pollinations-fallback" };
+    } catch (err) {
+      const message = err.message || String(err);
+      this.toast(`Image failed: ${message}`);
+      return { error: message };
+    }
+  }
+
+  async _generateViaXai(prompt, aspect) {
+    const models = [IMAGE_MODEL, "grok-imagine-image-quality", "grok-imagine-image"];
+    const formats = ["url", "b64_json"];
+    for (const model of models) {
+      for (const response_format of formats) {
+        const response = await fetch(IMAGES_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ model, prompt, n: 1, aspect_ratio: aspect, response_format }),
+        });
+        const raw = await response.text();
+        let data = {};
+        try {
+          data = raw ? JSON.parse(raw) : {};
+        } catch {
+          continue;
+        }
+        if (!response.ok) continue;
+        const item = (data.data && data.data[0]) || data;
+        const b64 = item.b64_json || item.b64 || "";
+        const url = item.url || "";
+        const src = b64 ? `data:image/jpeg;base64,${b64}` : url;
+        if (src) return { src, model };
+      }
+    }
+    return null;
+  }
+
+  _waitForImage(src, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const timer = setTimeout(() => reject(new Error("image timed out")), timeoutMs);
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve(src);
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("image failed to load"));
+      };
+      img.referrerPolicy = "no-referrer";
+      img.src = src;
+    });
   }
 
   showImage(args) {
@@ -1510,7 +1652,9 @@ class App {
     $("tool-x").checked = load(STORAGE.x, "true") === "true";
     $("tool-images").checked = load(STORAGE.images, "true") === "true";
     $("greeting").checked = load(STORAGE.greeting, "true") === "true";
+    $("app-version").textContent = `v${APP_VERSION}`;
     this.renderUsage();
+    this.renderSessionTimer();
     $("volume").value = load(STORAGE.volume, "90");
     this.applyVolume($("volume").value);
     $("vad-readout").textContent = Number($("vad-threshold").value).toFixed(2);
@@ -1534,7 +1678,10 @@ class App {
       if (event.target === $("settings-panel")) this.closeSettings();
     });
     $("help-btn").addEventListener("click", () => $("onboarding").showModal());
-    $("onboarding").addEventListener("close", () => save(STORAGE.onboarded, "1"));
+    $("onboarding").addEventListener("close", () => {
+      save(STORAGE.onboarded, "1");
+      this.startWakeWord();
+    });
 
     $("mute-btn").addEventListener("click", () => {
       const next = $("mute-btn").getAttribute("aria-pressed") !== "true";
@@ -1621,6 +1768,8 @@ class App {
     });
 
     setInterval(() => this.renderUsage(), 60_000);
+    this._timerTick = setInterval(() => this.renderSessionTimer(), 250);
+    this.startWakeWord();
   }
 
   async _requestWakeLock() {
