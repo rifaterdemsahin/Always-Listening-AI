@@ -252,6 +252,9 @@ a {
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .icon-btn:hover,

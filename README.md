@@ -1,5 +1,7 @@
 # Grok Always-Listening Voice Agent
 
+**[How it works (full guide)](GUIDE.md)** · Live: [rifaterdemsahin.github.io/Always-Listening-AI](https://rifaterdemsahin.github.io/Always-Listening-AI/) · [guide.html](https://rifaterdemsahin.github.io/Always-Listening-AI/guide.html)
+
 A production-ready, **pure frontend** voice agent that talks to [xAI Grok](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech) over the official realtime Speech-to-Speech WebSocket:
 
 ```
@@ -19,8 +21,8 @@ No build step. No framework. Open `index.html` (preferably via a tiny local serv
 - **Images in the transcript** — Grok can generate pictures via Imagine (`generate_image`) or display existing URLs (`show_image`). Tap to enlarge.
 - **Daily query count** in the header (spoken or typed turns; resets at local midnight)
 - **Say “Grok”** to start; a **3:00** timer on the top keeps the session online at least 3 minutes
-- Site **version** in the header (`v1.5.1`)
-- **Read aloud** via [Kokoro TTS](https://secondbrain-kokoro.fly.dev/voices) (`POST /api/speak`) — per-bubble Read, Read last, or auto-read Grok replies
+- Site **version** in the header (`v1.6.0`)
+- **Say “read it”** to have Kokoro read the last Grok reply (`POST /api/speak`). It does not auto-read.
 - Live **Kokoro API call** preview (copy as curl)
 - Settings saved in a **cookie** (`grok-voice-settings`) plus localStorage
 - Voice picker (`eve`, `ara`, `rex`, `leo`, …)

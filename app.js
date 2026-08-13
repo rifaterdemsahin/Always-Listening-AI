@@ -20,7 +20,7 @@ const MODEL = "grok-voice-latest";
 const CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets";
 const IMAGES_URL = "https://api.x.ai/v1/images/generations";
 const IMAGE_MODEL = "grok-imagine-image-2.0";
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.6.0";
 const SETTINGS_COOKIE = "grok-voice-settings";
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 const KOKORO_BASE = "https://secondbrain-kokoro.fly.dev";
@@ -264,6 +264,15 @@ function formatClock(ms) {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function wantsReadAloud(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bread it(\s+out loud|\s+aloud)?\b/.test(t) ||
+    /\bread (that|this)(\s+back)?\b/.test(t)
+  );
 }
 
 function wantsImage(text) {
@@ -644,6 +653,7 @@ class RealtimeSession {
     this._imageHandled = false;
     this._lastImageKey = "";
     this._lastImageAt = 0;
+    this._readHandledAt = 0;
   }
 
   send(payload) {
@@ -869,6 +879,7 @@ class RealtimeSession {
   sendText(text) {
     this._lastUserText = text;
     this._imageHandled = false;
+    if (this.fulfillReadAloud(text, true)) return;
     if (this.fulfillImageRequest(text, true)) return;
     this.send({
       type: "conversation.item.create",
@@ -887,6 +898,26 @@ class RealtimeSession {
     if (!isImageRefusal(spoken)) return;
     if (!this._lastUserText) return;
     this.fulfillImageRequest(this._lastUserText, true);
+  }
+
+  fulfillReadAloud(userText, final) {
+    if (!$("kokoro-on").checked) return false;
+    if (!wantsReadAloud(userText)) return false;
+    if (!final && String(userText).trim().length < 6) return false;
+    if (Date.now() - this._readHandledAt < 4000) return true;
+    this._readHandledAt = Date.now();
+    this.app.speaker.stop();
+    this.send({ type: "response.cancel" });
+    const last = this.app.lastAssistantText();
+    if (!last) {
+      this.app.toast("Nothing to read yet. Ask Grok something first, then say “read it”.");
+      this.app.setPhase("listening");
+      return true;
+    }
+    this.app.setPhase("speaking");
+    this.app.transcript.tool("Reading last reply with Kokoro…");
+    this.app.readAloud(last);
+    return true;
   }
 
   /**
@@ -984,7 +1015,7 @@ class RealtimeSession {
         const live = msg.transcript || msg.text || "";
         this.app.transcript.update("user", live, true);
         if (live) this._lastUserText = live;
-        this.fulfillImageRequest(live, false);
+        if (!this.fulfillReadAloud(live, false)) this.fulfillImageRequest(live, false);
         break;
       }
 
@@ -993,6 +1024,7 @@ class RealtimeSession {
         this.app.transcript.update("user", finalText, false);
         if (String(finalText).trim()) {
           this._lastUserText = finalText;
+          if (this.fulfillReadAloud(finalText, true)) break;
           this.app.noteQuery();
           this.fulfillImageRequest(finalText, true);
         }
@@ -1013,7 +1045,6 @@ class RealtimeSession {
       case "response.output_audio_transcript.done":
         this.app.transcript.finalize("assistant", msg.transcript);
         this._catchImageRefusal(msg.transcript);
-        this.app.maybeAutoRead(msg.transcript);
         break;
 
       case "response.output_audio.delta":
@@ -1807,11 +1838,10 @@ class App {
     }
   }
 
-  maybeAutoRead(text) {
-    if (!$("kokoro-on").checked) return;
-    const clean = String(text || "").trim();
-    if (!clean) return;
-    this.readAloud(clean);
+  lastAssistantText() {
+    const bubbles = $("transcript").querySelectorAll(".bubble.assistant .body");
+    const last = bubbles[bubbles.length - 1];
+    return last ? last.textContent.trim() : "";
   }
 
   readLast() {
@@ -1888,7 +1918,7 @@ class App {
     $("tool-x").checked = load(STORAGE.x, "true") === "true";
     $("tool-images").checked = load(STORAGE.images, "true") === "true";
     $("greeting").checked = load(STORAGE.greeting, "true") === "true";
-    $("kokoro-on").checked = load(STORAGE.kokoroOn, "false") === "true";
+    $("kokoro-on").checked = load(STORAGE.kokoroOn, "true") === "true";
     $("kokoro-speed").value = load(STORAGE.kokoroSpeed, "1");
     $("kokoro-speed-readout").textContent = `${Number($("kokoro-speed").value).toFixed(2)}×`;
     $("app-version").textContent = `v${APP_VERSION}`;
@@ -2010,6 +2040,10 @@ class App {
         return;
       }
       this.transcript.update("user", text, false);
+      if (this.session.fulfillReadAloud(text, true)) {
+        input.value = "";
+        return;
+      }
       this.noteQuery();
       this.session.sendText(text);
       input.value = "";

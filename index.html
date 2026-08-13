@@ -21,7 +21,7 @@
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <div class="brand-copy">
-          <h1>Grok Voice <span class="version" id="app-version">v1.5.1</span></h1>
+          <h1>Grok Voice <span class="version" id="app-version">v1.6.0</span></h1>
           <p>Always-listening speech-to-speech</p>
         </div>
       </div>
@@ -37,6 +37,7 @@
           <span class="status-dot" aria-hidden="true"></span>
           <span id="conn-label">Idle</span>
         </div>
+        <a class="icon-btn" id="guide-link" href="guide.html" title="How it works">Guide</a>
         <button type="button" class="icon-btn" id="help-btn" aria-label="Show first-time instructions">?</button>
         <button type="button" class="icon-btn" id="settings-btn" aria-expanded="false" aria-controls="settings-panel" aria-label="Open settings">
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -93,8 +94,8 @@
             <span>Images</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" id="kokoro-on" />
-            <span>Read aloud</span>
+            <input type="checkbox" id="kokoro-on" checked />
+            <span>Say “read it”</span>
           </label>
           <label for="kokoro-voice">Kokoro</label>
           <select id="kokoro-voice"></select>
@@ -167,7 +168,7 @@
         <label class="field">
           <span>Kokoro read-aloud speed <em id="kokoro-speed-readout">1.00×</em></span>
           <input type="range" id="kokoro-speed" min="0.5" max="2" step="0.05" value="1" />
-          <small>Uses <a href="https://secondbrain-kokoro.fly.dev/voices" target="_blank" rel="noopener noreferrer">secondbrain-kokoro</a> to speak transcript text.</small>
+          <small>After Grok answers, say <strong>read it</strong>. Kokoro then reads the last reply via <a href="https://secondbrain-kokoro.fly.dev/voices" target="_blank" rel="noopener noreferrer">POST /api/speak</a>.</small>
         </label>
 
         <div class="field usage-field">
@@ -200,10 +201,12 @@
         <li>Say <strong>Grok</strong> (or tap Start Listening) and allow the microphone prompt. The session stays online at least 3 minutes.</li>
         <li>Speak naturally. Server-side VAD detects when you start and stop. Interrupt Grok anytime.</li>
         <li>Ask Grok to <strong>show</strong> or <strong>generate</strong> a picture — it appears in the transcript. Tap it to enlarge.</li>
+        <li>When you want Kokoro to speak the last answer, say <strong>read it</strong>. It will not read until you say that.</li>
       </ol>
       <p class="onboarding-note">
         Chrome / Chromium in SteamOS Desktop Mode works best. Open this page over
         <code>http://localhost</code>, not as a raw <code>file://</code> URL.
+        Full write-up: <a href="guide.html">How it works</a>.
       </p>
       <form method="dialog">
         <button type="submit" class="listen-btn compact" id="onboarding-ok">Got it</button>
