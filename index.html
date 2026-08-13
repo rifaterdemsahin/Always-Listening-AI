@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#05070b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="Always-listening Grok voice agent for Steam Deck Desktop Mode. Streams your microphone to xAI realtime Speech-to-Speech and plays Grok back through the speakers." />
+  <title>Grok Always-Listening Voice Agent</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2305070b'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%233dffb0' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%233dffb0'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <a class="skip-link" href="#listen-btn">Skip to listen control</a>
+
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy">
+          <h1>Grok Voice</h1>
+          <p>Always-listening speech-to-speech</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="status-chip" id="conn-chip" data-state="idle" title="Connection status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="conn-label">Idle</span>
+        </div>
+        <button type="button" class="icon-btn" id="help-btn" aria-label="Show first-time instructions">?</button>
+        <button type="button" class="icon-btn" id="settings-btn" aria-expanded="false" aria-controls="settings-panel" aria-label="Open settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path fill="currentColor" d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm8.94 2.66-1.7-.28a7.1 7.1 0 0 0-.66-1.6l1.07-1.35a.75.75 0 0 0-.06-.98l-1.94-1.94a.75.75 0 0 0-.98-.06l-1.35 1.07c-.5-.28-1.04-.5-1.6-.66l-.28-1.7A.75.75 0 0 0 12.7 3h-2.74a.75.75 0 0 0-.74.62l-.28 1.7c-.56.16-1.1.38-1.6.66L6 4.91a.75.75 0 0 0-.98.06L3.08 6.91a.75.75 0 0 0-.06.98l1.07 1.35c-.28.5-.5 1.04-.66 1.6l-1.7.28A.75.75 0 0 0 1 12.04v2.74c0 .37.27.68.63.74l1.7.28c.16.56.38 1.1.66 1.6l-1.07 1.35a.75.75 0 0 0 .06.98l1.94 1.94c.27.27.7.3.98.06l1.35-1.07c.5.28 1.04.5 1.6.66l.28 1.7c.06.36.37.63.74.63h2.74c.37 0 .68-.27.74-.63l.28-1.7c.56-.16 1.1-.38 1.6-.66l1.35 1.07c.28.24.71.21.98-.06l1.94-1.94a.75.75 0 0 0 .06-.98l-1.07-1.35c.28-.5.5-1.04.66-1.6l1.7-.28c.36-.06.63-.37.63-.74v-2.74a.75.75 0 0 0-.69-.72Z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="stage" aria-label="Listen control">
+        <p class="phase-label" id="phase-label">Ready when you are</p>
+        <p class="phase-hint" id="phase-hint">Paste an xAI API key, then tap Start Listening.</p>
+
+        <div class="orb-wrap">
+          <canvas id="viz" width="360" height="360" aria-hidden="true"></canvas>
+          <button type="button" class="listen-btn" id="listen-btn" aria-pressed="false">
+            <span class="listen-inner">
+              <span class="listen-icon" aria-hidden="true"></span>
+              <span class="listen-text" id="listen-text">Start Listening</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="transport" role="group" aria-label="Playback controls">
+          <button type="button" class="pill-btn" id="mute-btn" aria-pressed="false" title="Mute Grok">
+            <span id="mute-icon" aria-hidden="true">🔊</span>
+            <span id="mute-label">Mute</span>
+          </button>
+          <label class="volume">
+            <span class="sr-only">Speaker volume</span>
+            <input type="range" id="volume" min="0" max="100" value="90" step="1" />
+            <span id="volume-readout">90%</span>
+          </label>
+          <button type="button" class="pill-btn" id="mic-mute-btn" aria-pressed="false" title="Mute microphone">
+            <span aria-hidden="true">🎤</span>
+            <span id="mic-mute-label">Mic on</span>
+          </button>
+        </div>
+
+        <div class="voice-row">
+          <label for="voice">Voice</label>
+          <select id="voice"></select>
+          <label class="toggle">
+            <input type="checkbox" id="tool-web" checked />
+            <span>Web search</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="tool-x" checked />
+            <span>X search</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="transcript-panel" aria-label="Conversation transcript">
+        <div class="transcript-head">
+          <h2>Transcript</h2>
+          <button type="button" class="text-btn" id="clear-transcript">Clear</button>
+        </div>
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+        <form class="composer" id="composer">
+          <label class="sr-only" for="text-input">Type a message</label>
+          <input type="text" id="text-input" placeholder="Type if the mic is busy…" autocomplete="off" enterkeyhint="send" />
+          <button type="submit" class="send-btn" id="send-btn">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <aside class="settings" id="settings-panel" hidden>
+      <div class="settings-sheet">
+        <div class="settings-head">
+          <h2>Settings</h2>
+          <button type="button" class="icon-btn" id="settings-close" aria-label="Close settings">✕</button>
+        </div>
+
+        <label class="field">
+          <span>xAI API key</span>
+          <div class="key-row">
+            <input type="password" id="api-key" placeholder="xai-…" autocomplete="off" spellcheck="false" />
+            <button type="button" class="pill-btn" id="toggle-key" aria-pressed="false">Show</button>
+          </div>
+          <small>Stored only in this browser’s localStorage. Never committed to git.</small>
+        </label>
+
+        <label class="field">
+          <span>System instructions</span>
+          <textarea id="instructions" rows="4"></textarea>
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>VAD threshold <em id="vad-readout">0.60</em></span>
+            <input type="range" id="vad-threshold" min="0.10" max="0.90" step="0.05" value="0.60" />
+            <small>Higher = less sensitive. Lower if the Deck mic is quiet.</small>
+          </label>
+          <label class="field">
+            <span>Silence to end turn <em id="silence-readout">800 ms</em></span>
+            <input type="range" id="silence-ms" min="200" max="2000" step="50" value="800" />
+          </label>
+        </div>
+
+        <label class="toggle block">
+          <input type="checkbox" id="greeting" checked />
+          <span>Speak a short greeting when a session starts</span>
+        </label>
+
+        <div class="settings-actions">
+          <button type="button" class="pill-btn danger" id="forget-key">Forget API key</button>
+          <button type="button" class="pill-btn" id="settings-done">Done</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="toast" id="toast" role="status" aria-live="assertive" hidden></div>
+  </div>
+
+  <dialog class="onboarding" id="onboarding">
+    <div class="onboarding-card">
+      <h2>Talk to Grok on this Deck</h2>
+      <ol>
+        <li>
+          Get an API key at
+          <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a>
+          and add credits.
+        </li>
+        <li>Open <strong>Settings</strong> and paste the key. It stays on this device.</li>
+        <li>Use wired or Bluetooth headphones if you can — the Deck speakers will otherwise echo into the mic.</li>
+        <li>Tap the big <strong>Start Listening</strong> button and allow the microphone prompt.</li>
+        <li>Speak naturally. Server-side VAD detects when you start and stop. Interrupt Grok anytime.</li>
+      </ol>
+      <p class="onboarding-note">
+        Chrome / Chromium in SteamOS Desktop Mode works best. Open this page over
+        <code>http://localhost</code>, not as a raw <code>file://</code> URL.
+      </p>
+      <form method="dialog">
+        <button type="submit" class="listen-btn compact" id="onboarding-ok">Got it</button>
+      </form>
+    </div>
+  </dialog>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
