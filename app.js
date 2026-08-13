@@ -40,14 +40,20 @@ const STORAGE = {
   usage: "grok-voice.dailyUsage",
 };
 
+const IMAGE_RULES = [
+  "You have a visible screen on this device and working image tools. You CAN show pictures.",
+  "Never say you are voice-only, have no canvas, or cannot draw.",
+  "When the user wants a picture, immediately call generate_image (new art) or show_image (an existing https URL).",
+  "Then say one short sentence about what you drew. Do not only describe the picture.",
+].join(" ");
+
 const DEFAULT_INSTRUCTIONS = [
+  IMAGE_RULES,
   "You are Grok, an always-listening voice companion running on a handheld Steam Deck in Desktop Mode.",
   "Keep spoken answers short and conversational — this is a voice call, not an essay.",
   "Match the language the user is speaking. Switch languages mid-conversation if they do.",
   "Use web_search or x_search when you need current information.",
   "If the user asks you to change volume, mute, unmute, or stop listening, call the matching tool.",
-  "When the user asks to see, show, draw, or generate a picture, you MUST call generate_image (new art) or show_image (an existing https URL).",
-  "The picture only appears on their screen if you call one of those tools — describing it is not enough.",
   "Keep generate_image prompts concrete and visual. Prefer 1:1 unless they ask for a wide or tall frame.",
   "Be a useful handheld companion: clear, quick, and a little dry.",
 ].join(" ");
@@ -159,6 +165,46 @@ function resampleLinear(input, fromRate, toRate) {
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function wantsImage(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t.trim()) return false;
+  if (/\b(draw|drawing|drew|paint|painting|sketch|sketched|doodle|illustrate|illustrated|render)\b/.test(t)) {
+    return true;
+  }
+  if (/\b(image|picture|pic|photo|photograph|illustration|artwork|poster|wallpaper)\b/.test(t)) {
+    return true;
+  }
+  if (/\bshow me (a|an)\b/.test(t)) return true;
+  if (/\b(visualize|visualise|looks like)\b/.test(t)) return true;
+  return false;
+}
+
+function isImageRefusal(text) {
+  const t = String(text || "").toLowerCase();
+  return (
+    /\b(can'?t|cannot|unable to|don't|do not)\s+(draw|paint|generate|create|show|make)\b/.test(t) ||
+    /\bno canvas\b/.test(t) ||
+    /\ball voice\b/.test(t) ||
+    /\bvoice[ -]?only\b/.test(t) ||
+    /\bno (pictures|images|visuals)\b/.test(t)
+  );
+}
+
+function imagePromptFrom(text) {
+  const cleaned = String(text || "")
+    .replace(/^(hey|hi|hello|please|ok|okay)[,.\s]+/i, "")
+    .replace(/^(can you|could you|would you|will you)\s+/i, "")
+    .replace(/^(please\s+)?(draw|paint|sketch|doodle|illustrate|generate|create|make|show|visualize|visualise)\s+(me\s+)?(an?\s+)?(image|picture|pic|photo|illustration|drawing|poster)?\s*(of\s+)?/i, "")
+    .trim();
+  return cleaned || String(text || "").trim();
+}
+
+function sessionInstructions() {
+  const custom = ($("instructions").value || "").trim() || DEFAULT_INSTRUCTIONS;
+  if (/\bgenerate_image\b/.test(custom) && /never say you/i.test(custom)) return custom;
+  return `${IMAGE_RULES} ${custom}`;
 }
 
 function localDayKey(date = new Date()) {
@@ -495,6 +541,8 @@ class RealtimeSession {
     this.pendingFns = 0;
     this.sessionReady = false;
     this._earlyAudio = [];
+    this._lastUserText = "";
+    this._imageHandled = false;
   }
 
   send(payload) {
@@ -675,7 +723,7 @@ class RealtimeSession {
       type: "session.update",
       session: {
         voice: $("voice").value || "eve",
-        instructions: $("instructions").value.trim() || DEFAULT_INSTRUCTIONS,
+        instructions: sessionInstructions(),
         turn_detection: {
           type: "server_vad",
           threshold: Number($("vad-threshold").value),
@@ -718,6 +766,9 @@ class RealtimeSession {
   }
 
   sendText(text) {
+    this._lastUserText = text;
+    this._imageHandled = false;
+    if (this.fulfillImageRequest(text, true)) return;
     this.send({
       type: "conversation.item.create",
       item: {
@@ -727,6 +778,46 @@ class RealtimeSession {
       },
     });
     this.send({ type: "response.create" });
+  }
+
+  _catchImageRefusal(explicitText) {
+    const bubble = this.app.transcript.live.assistant;
+    const spoken = explicitText || (bubble && bubble.querySelector(".body").textContent) || "";
+    if (!isImageRefusal(spoken)) return;
+    if (!this._lastUserText) return;
+    this.fulfillImageRequest(this._lastUserText, true);
+  }
+
+  /**
+   * Voice models often refuse to "draw". Don't wait for a tool call —
+   * detect the request, cancel the refusal, and generate on-screen.
+   */
+  fulfillImageRequest(userText, final) {
+    if (this._imageHandled || !$("tool-images").checked) return false;
+    if (!wantsImage(userText)) return false;
+    const prompt = imagePromptFrom(userText);
+    if (!final && prompt.length < 8) return false;
+    this._imageHandled = true;
+    this.app.speaker.stop();
+    this.send({ type: "response.cancel" });
+    this.app.setPhase("thinking");
+    this.app.transcript.tool("Drawing…");
+    this.app.generateImage({ prompt, caption: prompt }).then((result) => {
+      if (result && result.shown) {
+        this.send({
+          type: "conversation.item.create",
+          item: {
+            type: "force_message",
+            role: "assistant",
+            interruptible: true,
+            content: [{ type: "output_text", text: "Here you go. It's on your screen." }],
+          },
+        });
+        return;
+      }
+      this.app.setPhase("listening");
+    });
+    return true;
   }
 
   _onMessage(event) {
@@ -758,7 +849,7 @@ class RealtimeSession {
               type: "force_message",
               role: "assistant",
               interruptible: true,
-              content: [{ type: "output_text", text: "Hey. I'm Grok. I'm listening." }],
+              content: [{ type: "output_text", text: "Hey. I'm Grok. I can talk, and I can put pictures on your screen." }],
             },
           });
         }
@@ -774,20 +865,31 @@ class RealtimeSession {
         this.app.speaker.stop();
         this.app.setPhase("user");
         this.app.transcript.begin("user");
+        this._imageHandled = false;
         break;
 
       case "input_audio_buffer.speech_stopped":
         this.app.setPhase("thinking");
         break;
 
-      case "conversation.item.input_audio_transcription.updated":
-        this.app.transcript.update("user", msg.transcript || msg.text || "", true);
+      case "conversation.item.input_audio_transcription.updated": {
+        const live = msg.transcript || msg.text || "";
+        this.app.transcript.update("user", live, true);
+        if (live) this._lastUserText = live;
+        this.fulfillImageRequest(live, false);
         break;
+      }
 
-      case "conversation.item.input_audio_transcription.completed":
-        this.app.transcript.update("user", msg.transcript || msg.text || "", false);
-        if (String(msg.transcript || msg.text || "").trim()) this.app.noteQuery();
+      case "conversation.item.input_audio_transcription.completed": {
+        const finalText = msg.transcript || msg.text || "";
+        this.app.transcript.update("user", finalText, false);
+        if (String(finalText).trim()) {
+          this._lastUserText = finalText;
+          this.app.noteQuery();
+          this.fulfillImageRequest(finalText, true);
+        }
         break;
+      }
 
       case "response.created":
         this.app.setPhase("thinking");
@@ -797,10 +899,12 @@ class RealtimeSession {
       case "response.output_audio_transcript.delta":
         this.app.setPhase("speaking");
         this.app.transcript.append("assistant", msg.delta || "");
+        this._catchImageRefusal();
         break;
 
       case "response.output_audio_transcript.done":
         this.app.transcript.finalize("assistant", msg.transcript);
+        this._catchImageRefusal(msg.transcript);
         break;
 
       case "response.output_audio.delta":
@@ -1262,45 +1366,54 @@ class App {
 
     const aspect = String(args.aspect_ratio || "1:1").trim() || "1:1";
     const caption = String(args.caption || prompt).trim();
+    const models = [IMAGE_MODEL, "grok-imagine-image-quality", "grok-imagine-image"];
+    let lastError = "Image API returned no image data.";
 
-    const response = await fetch(IMAGES_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: IMAGE_MODEL,
-        prompt,
-        n: 1,
-        aspect_ratio: aspect,
-        response_format: "b64_json",
-      }),
-    });
+    for (const model of models) {
+      const response = await fetch(IMAGES_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          prompt,
+          n: 1,
+          aspect_ratio: aspect,
+          response_format: "b64_json",
+        }),
+      });
 
-    const raw = await response.text();
-    let data = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      data = { error: raw.slice(0, 180) };
+      const raw = await response.text();
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = { error: raw.slice(0, 180) };
+      }
+
+      if (!response.ok) {
+        lastError = (data.error && data.error.message) || data.error || raw.slice(0, 180) || `HTTP ${response.status}`;
+        continue;
+      }
+
+      const item = (data.data && data.data[0]) || data;
+      const b64 = item.b64_json || item.b64 || "";
+      const url = item.url || "";
+      const src = b64 ? `data:image/jpeg;base64,${b64}` : url;
+      if (!src) {
+        lastError = "Image API returned no image data.";
+        continue;
+      }
+
+      this.transcript.addImages([{ src, caption }]);
+      this.noteImage();
+      return { shown: true, caption, model };
     }
 
-    if (!response.ok) {
-      const message = (data.error && data.error.message) || data.error || raw.slice(0, 180) || `HTTP ${response.status}`;
-      this.toast(`Image failed: ${message}`);
-      return { error: String(message) };
-    }
-
-    const item = (data.data && data.data[0]) || data;
-    const b64 = item.b64_json || item.b64 || "";
-    const url = item.url || "";
-    const src = b64 ? `data:image/jpeg;base64,${b64}` : url;
-    if (!src) return { error: "Image API returned no image data." };
-
-    this.transcript.addImages([{ src, caption }]);
-    this.noteImage();
-    return { shown: true, caption, model: IMAGE_MODEL };
+    this.toast(`Image failed: ${lastError}`);
+    return { error: String(lastError) };
   }
 
   showImage(args) {
@@ -1388,7 +1501,9 @@ class App {
 
     $("api-key").value = load(STORAGE.key, "");
     $("voice").value = load(STORAGE.voice, "eve");
-    $("instructions").value = load(STORAGE.instructions, DEFAULT_INSTRUCTIONS);
+    $("instructions").value = load(STORAGE.instructions, "");
+    $("instructions").value = sessionInstructions();
+    save(STORAGE.instructions, $("instructions").value);
     $("vad-threshold").value = load(STORAGE.vad, "0.60");
     $("silence-ms").value = load(STORAGE.silence, "800");
     $("tool-web").checked = load(STORAGE.web, "true") === "true";
