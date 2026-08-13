@@ -16,10 +16,12 @@ No build step. No framework. Open `index.html` (preferably via a tiny local serv
 - Real-time mic capture via **AudioWorklet** (ScriptProcessor fallback)
 - Base64 PCM16 playback through the Web Audio API
 - Conversation transcript (live user captions + Grok text)
+- **Images in the transcript** — Grok can generate pictures via Imagine (`generate_image`) or display existing URLs (`show_image`). Tap to enlarge.
+- **Daily query count** in the header (spoken or typed turns; resets at local midnight)
 - Voice picker (`eve`, `ara`, `rex`, `leo`, …)
 - Volume slider, speaker mute, mic mute
 - Server-side **web search** and **X search** tools
-- Client tools: local time, set volume, mute, stop listening
+- Client tools: generate/show image, local time, set volume, mute, stop listening
 - Exponential-backoff reconnect + session resumption
 - API key stored only in `localStorage`
 - First-run instructions overlay
@@ -109,7 +111,7 @@ On connect the client sends `session.update`:
 | `turn_detection.type` | `server_vad` |
 | `audio.input/output` | `audio/pcm` @ 24 kHz |
 | `audio.input.transcription.model` | `grok-transcribe` (live captions) |
-| `tools` | `web_search`, `x_search`, plus local functions |
+| `tools` | `web_search`, `x_search`, plus local functions (`generate_image`, `show_image`, …) |
 | `resumption.enabled` | `true` (reconnect keeps conversation context) |
 
 Then:

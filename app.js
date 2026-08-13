@@ -18,6 +18,8 @@
 const REALTIME_URL = "wss://api.x.ai/v1/realtime";
 const MODEL = "grok-voice-latest";
 const CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets";
+const IMAGES_URL = "https://api.x.ai/v1/images/generations";
+const IMAGE_MODEL = "grok-imagine-image-2.0";
 const SAMPLE_RATE = 24000;
 const FRAME_MS = 100;
 const MAX_RECONNECT_DELAY_MS = 15000;
@@ -34,6 +36,8 @@ const STORAGE = {
   x: "grok-voice.toolX",
   greeting: "grok-voice.greeting",
   onboarded: "grok-voice.onboarded",
+  images: "grok-voice.toolImages",
+  usage: "grok-voice.dailyUsage",
 };
 
 const DEFAULT_INSTRUCTIONS = [
@@ -42,6 +46,9 @@ const DEFAULT_INSTRUCTIONS = [
   "Match the language the user is speaking. Switch languages mid-conversation if they do.",
   "Use web_search or x_search when you need current information.",
   "If the user asks you to change volume, mute, unmute, or stop listening, call the matching tool.",
+  "When the user asks to see, show, draw, or generate a picture, you MUST call generate_image (new art) or show_image (an existing https URL).",
+  "The picture only appears on their screen if you call one of those tools — describing it is not enough.",
+  "Keep generate_image prompts concrete and visual. Prefer 1:1 unless they ask for a wide or tall frame.",
   "Be a useful handheld companion: clear, quick, and a little dry.",
 ].join(" ");
 
@@ -152,6 +159,61 @@ function resampleLinear(input, fromRate, toRate) {
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function localDayKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Per-calendar-day counters kept in localStorage. Resets at local midnight. */
+class DailyUsage {
+  constructor(storageKey) {
+    this.storageKey = storageKey;
+    this.state = this._read();
+  }
+
+  _blank() {
+    return { date: localDayKey(), queries: 0, images: 0 };
+  }
+
+  _read() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(this.storageKey) || "null");
+      if (!raw || raw.date !== localDayKey()) return this._blank();
+      return {
+        date: raw.date,
+        queries: Number(raw.queries) || 0,
+        images: Number(raw.images) || 0,
+      };
+    } catch {
+      return this._blank();
+    }
+  }
+
+  _write() {
+    localStorage.setItem(this.storageKey, JSON.stringify(this.state));
+  }
+
+  refresh() {
+    if (this.state.date !== localDayKey()) this.state = this._blank();
+    return this.state;
+  }
+
+  bump(field) {
+    this.refresh();
+    this.state[field] = (this.state[field] || 0) + 1;
+    this._write();
+    return this.state;
+  }
+
+  reset() {
+    this.state = this._blank();
+    this._write();
+    return this.state;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +569,69 @@ class RealtimeSession {
 
   _configureSession() {
     const tools = [];
-    if ($("tool-web").checked) tools.push({ type: "web_search" });
-    if ($("tool-x").checked) tools.push({ type: "x_search" });
+    if ($("tool-web").checked) {
+      tools.push({ type: "web_search", enable_image_understanding: true });
+    }
+    if ($("tool-x").checked) {
+      tools.push({ type: "x_search", enable_image_understanding: true });
+    }
+    if ($("tool-images").checked) {
+      tools.push(
+        {
+          type: "function",
+          name: "generate_image",
+          description:
+            "Generate a new picture with Grok Imagine and show it on the user's screen. Use when they ask to see, draw, or generate something.",
+          parameters: {
+            type: "object",
+            properties: {
+              prompt: {
+                type: "string",
+                description: "Detailed visual prompt for the image model.",
+              },
+              aspect_ratio: {
+                type: "string",
+                description: "Optional aspect ratio such as 1:1, 16:9, or 9:16.",
+              },
+              caption: {
+                type: "string",
+                description: "Short on-screen caption for the picture.",
+              },
+            },
+            required: ["prompt"],
+          },
+        },
+        {
+          type: "function",
+          name: "show_image",
+          description:
+            "Display one or more existing https image URLs on the user's screen (photos found via search, known links, etc.).",
+          parameters: {
+            type: "object",
+            properties: {
+              url: { type: "string", description: "Single image URL." },
+              urls: {
+                type: "array",
+                items: { type: "string" },
+                description: "Multiple image URLs.",
+              },
+              caption: { type: "string", description: "Caption for a single image." },
+              images: {
+                type: "array",
+                description: "List of {url, caption} objects.",
+                items: {
+                  type: "object",
+                  properties: {
+                    url: { type: "string" },
+                    caption: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        }
+      );
+    }
     tools.push(
       {
         type: "function",
@@ -663,6 +786,7 @@ class RealtimeSession {
 
       case "conversation.item.input_audio_transcription.completed":
         this.app.transcript.update("user", msg.transcript || msg.text || "", false);
+        if (String(msg.transcript || msg.text || "").trim()) this.app.noteQuery();
         break;
 
       case "response.created":
@@ -692,6 +816,10 @@ class RealtimeSession {
 
       case "response.function_call_arguments.done":
         this._handleFunction(msg);
+        break;
+
+      case "response.output_item.done":
+        this._maybeShowServerImage(msg.item || msg);
         break;
 
       case "response.mcp_call.in_progress":
@@ -758,6 +886,17 @@ class RealtimeSession {
     // Wait out the current spoken turn so the follow-up does not overlap.
     await this.app.speaker.waitUntilIdle();
     if (this.wanted) this.send({ type: "response.create" });
+  }
+
+  _maybeShowServerImage(item) {
+    if (!item || item.type !== "image_generation_call") return;
+    const result = item.result;
+    if (!result) return;
+    const src = String(result).startsWith("http")
+      ? result
+      : `data:image/jpeg;base64,${result}`;
+    this.app.transcript.addImages([{ src, caption: item.prompt || "Generated image" }]);
+    this.app.noteImage();
   }
 
   _onClose(event) {
@@ -839,6 +978,47 @@ class TranscriptView {
     el.className = "bubble tool";
     el.innerHTML = `<span class="who">System</span><div class="body"></div>`;
     el.querySelector(".body").textContent = text;
+    this.root.appendChild(el);
+    this._scroll();
+  }
+
+  addImages(images) {
+    const list = (images || []).filter((img) => img && img.src);
+    if (!list.length) return;
+
+    const el = document.createElement("article");
+    el.className = "bubble image";
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = `Image · ${nowLabel()}`;
+    const grid = document.createElement("div");
+    grid.className = "image-grid";
+
+    list.forEach((img) => {
+      const card = document.createElement("figure");
+      card.className = "image-card";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "thumb";
+      btn.dataset.src = img.src;
+      btn.dataset.caption = img.caption || "";
+      const picture = document.createElement("img");
+      picture.src = img.src;
+      picture.alt = img.caption || "Generated image";
+      picture.referrerPolicy = "no-referrer";
+      picture.loading = "lazy";
+      btn.appendChild(picture);
+      card.appendChild(btn);
+      if (img.caption) {
+        const cap = document.createElement("figcaption");
+        cap.textContent = img.caption;
+        card.appendChild(cap);
+      }
+      grid.appendChild(card);
+    });
+
+    el.appendChild(who);
+    el.appendChild(grid);
     this.root.appendChild(el);
     this._scroll();
   }
@@ -943,6 +1123,7 @@ class App {
     this.speaker = new Speaker();
     this.session = new RealtimeSession(this);
     this.transcript = new TranscriptView($("transcript"));
+    this.usage = new DailyUsage(STORAGE.usage);
     this.viz = new OrbViz($("viz"));
     this.mic = new MicCapture({
       onFrame: (b64) => this.session.appendAudio(b64),
@@ -1047,9 +1228,110 @@ class App {
       case "stop_listening":
         setTimeout(() => this.stop(), 400);
         return { stopped: true };
+      case "generate_image":
+        return this.generateImage(args);
+      case "show_image":
+        return this.showImage(args);
       default:
         return { error: `Unknown tool ${name}` };
     }
+  }
+
+  noteQuery() {
+    this.usage.bump("queries");
+    this.renderUsage();
+  }
+
+  noteImage() {
+    this.usage.bump("images");
+    this.renderUsage();
+  }
+
+  renderUsage() {
+    const { queries, images } = this.usage.refresh();
+    $("query-count").textContent = String(queries);
+    const imageBit = images ? ` · ${images} image${images === 1 ? "" : "s"}` : "";
+    $("query-detail").textContent = `${queries} ${queries === 1 ? "query" : "queries"}${imageBit}`;
+    $("query-chip").title = `${queries} spoken or typed turns today. Resets at local midnight.`;
+  }
+
+  async generateImage(args) {
+    const prompt = String(args.prompt || "").trim();
+    if (!prompt) return { error: "prompt is required" };
+    if (!$("tool-images").checked) return { error: "Images are turned off in the UI." };
+
+    const aspect = String(args.aspect_ratio || "1:1").trim() || "1:1";
+    const caption = String(args.caption || prompt).trim();
+
+    const response = await fetch(IMAGES_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: IMAGE_MODEL,
+        prompt,
+        n: 1,
+        aspect_ratio: aspect,
+        response_format: "b64_json",
+      }),
+    });
+
+    const raw = await response.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { error: raw.slice(0, 180) };
+    }
+
+    if (!response.ok) {
+      const message = (data.error && data.error.message) || data.error || raw.slice(0, 180) || `HTTP ${response.status}`;
+      this.toast(`Image failed: ${message}`);
+      return { error: String(message) };
+    }
+
+    const item = (data.data && data.data[0]) || data;
+    const b64 = item.b64_json || item.b64 || "";
+    const url = item.url || "";
+    const src = b64 ? `data:image/jpeg;base64,${b64}` : url;
+    if (!src) return { error: "Image API returned no image data." };
+
+    this.transcript.addImages([{ src, caption }]);
+    this.noteImage();
+    return { shown: true, caption, model: IMAGE_MODEL };
+  }
+
+  showImage(args) {
+    const collected = [];
+    const push = (url, caption) => {
+      const href = String(url || "").trim();
+      if (!href || !/^(https?:|data:image\/)/i.test(href)) return;
+      collected.push({ src: href, caption: caption ? String(caption) : "" });
+    };
+
+    if (Array.isArray(args.images)) {
+      args.images.forEach((img) => {
+        if (typeof img === "string") push(img, args.caption);
+        else push(img && img.url, (img && img.caption) || args.caption);
+      });
+    }
+    if (Array.isArray(args.urls)) args.urls.forEach((url) => push(url, args.caption));
+    if (args.url) push(args.url, args.caption);
+
+    if (!collected.length) return { error: "No image URL provided." };
+    this.transcript.addImages(collected);
+    this.noteImage();
+    return { shown: collected.length };
+  }
+
+  openLightbox(src, caption) {
+    const dialog = $("lightbox");
+    $("lightbox-img").src = src;
+    $("lightbox-img").alt = caption || "Image";
+    $("lightbox-caption").textContent = caption || "";
+    if (typeof dialog.showModal === "function") dialog.showModal();
   }
 
   applyVolume(percent) {
@@ -1091,6 +1373,7 @@ class App {
     save(STORAGE.silence, $("silence-ms").value);
     save(STORAGE.web, String($("tool-web").checked));
     save(STORAGE.x, String($("tool-x").checked));
+    save(STORAGE.images, String($("tool-images").checked));
     save(STORAGE.greeting, String($("greeting").checked));
   }
 
@@ -1110,7 +1393,9 @@ class App {
     $("silence-ms").value = load(STORAGE.silence, "800");
     $("tool-web").checked = load(STORAGE.web, "true") === "true";
     $("tool-x").checked = load(STORAGE.x, "true") === "true";
+    $("tool-images").checked = load(STORAGE.images, "true") === "true";
     $("greeting").checked = load(STORAGE.greeting, "true") === "true";
+    this.renderUsage();
     $("volume").value = load(STORAGE.volume, "90");
     this.applyVolume($("volume").value);
     $("vad-readout").textContent = Number($("vad-threshold").value).toFixed(2);
@@ -1167,7 +1452,7 @@ class App {
       this.toast("API key removed from this browser.");
     });
 
-    ["voice", "instructions", "vad-threshold", "silence-ms", "tool-web", "tool-x", "greeting"].forEach((id) => {
+    ["voice", "instructions", "vad-threshold", "silence-ms", "tool-web", "tool-x", "tool-images", "greeting"].forEach((id) => {
       $(id).addEventListener("change", () => {
         this.persistSettings();
         if (this.active && this.session.sessionReady) this.session._configureSession();
@@ -1175,6 +1460,17 @@ class App {
     });
 
     $("clear-transcript").addEventListener("click", () => this.transcript.clear());
+    $("reset-queries").addEventListener("click", () => {
+      this.usage.reset();
+      this.renderUsage();
+      this.toast("Today’s query count was reset.");
+    });
+
+    $("transcript").addEventListener("click", (event) => {
+      const thumb = event.target.closest("button.thumb");
+      if (!thumb) return;
+      this.openLightbox(thumb.dataset.src, thumb.dataset.caption);
+    });
 
     $("composer").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1186,12 +1482,14 @@ class App {
         return;
       }
       this.transcript.update("user", text, false);
+      this.noteQuery();
       this.session.sendText(text);
       input.value = "";
     });
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
+        this.renderUsage();
         this._requestWakeLock();
         if (this.speaker.context && this.speaker.context.state === "suspended") {
           this.speaker.context.resume();
@@ -1206,6 +1504,8 @@ class App {
     window.addEventListener("unhandledrejection", (event) => {
       if (this.active) this.toast(event.reason && event.reason.message ? event.reason.message : "Unexpected error");
     });
+
+    setInterval(() => this.renderUsage(), 60_000);
   }
 
   async _requestWakeLock() {

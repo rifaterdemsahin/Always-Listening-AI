@@ -26,6 +26,10 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <div class="status-chip usage-chip" id="query-chip" title="Spoken or typed turns today. Resets at local midnight.">
+          <span class="query-num" id="query-count">0</span>
+          <span>today</span>
+        </div>
         <div class="status-chip" id="conn-chip" data-state="idle" title="Connection status">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="conn-label">Idle</span>
@@ -80,6 +84,10 @@
           <label class="toggle">
             <input type="checkbox" id="tool-x" checked />
             <span>X search</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="tool-images" checked />
+            <span>Images</span>
           </label>
         </div>
       </section>
@@ -136,6 +144,12 @@
           <span>Speak a short greeting when a session starts</span>
         </label>
 
+        <div class="field usage-field">
+          <span>Usage today <em id="query-detail">0 queries</em></span>
+          <small>Each spoken or typed turn counts as one query. Pictures shown today are tracked separately. Both reset at local midnight.</small>
+          <button type="button" class="pill-btn" id="reset-queries">Reset today</button>
+        </div>
+
         <div class="settings-actions">
           <button type="button" class="pill-btn danger" id="forget-key">Forget API key</button>
           <button type="button" class="pill-btn" id="settings-done">Done</button>
@@ -159,6 +173,7 @@
         <li>Use wired or Bluetooth headphones if you can — the Deck speakers will otherwise echo into the mic.</li>
         <li>Tap the big <strong>Start Listening</strong> button and allow the microphone prompt.</li>
         <li>Speak naturally. Server-side VAD detects when you start and stop. Interrupt Grok anytime.</li>
+        <li>Ask Grok to <strong>show</strong> or <strong>generate</strong> a picture — it appears in the transcript. Tap it to enlarge.</li>
       </ol>
       <p class="onboarding-note">
         Chrome / Chromium in SteamOS Desktop Mode works best. Open this page over
@@ -168,6 +183,14 @@
         <button type="submit" class="listen-btn compact" id="onboarding-ok">Got it</button>
       </form>
     </div>
+  </dialog>
+
+  <dialog class="lightbox" id="lightbox">
+    <img id="lightbox-img" alt="" />
+    <p id="lightbox-caption"></p>
+    <form method="dialog">
+      <button type="submit" class="pill-btn" id="lightbox-close">Close</button>
+    </form>
   </dialog>
 
   <script src="app.js" defer></script>
