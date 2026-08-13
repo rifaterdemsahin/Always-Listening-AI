@@ -20,7 +20,19 @@ const MODEL = "grok-voice-latest";
 const CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets";
 const IMAGES_URL = "https://api.x.ai/v1/images/generations";
 const IMAGE_MODEL = "grok-imagine-image-2.0";
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
+const KOKORO_BASE = "https://secondbrain-kokoro.fly.dev";
+const KOKORO_VOICES_FALLBACK = [
+  { id: "af_heart", name: "American Female — Heart" },
+  { id: "af_bella", name: "American Female — Bella" },
+  { id: "af_nicole", name: "American Female — Nicole" },
+  { id: "am_adam", name: "American Male — Adam" },
+  { id: "am_michael", name: "American Male — Michael" },
+  { id: "bf_emma", name: "British Female — Emma" },
+  { id: "bm_george", name: "British Male — George" },
+  { id: "tr-TR-AhmetNeural", name: "TR Ahmet — Male" },
+  { id: "tr-TR-EmelNeural", name: "TR Emel — Female" },
+];
 const SESSION_MIN_MS = 3 * 60 * 1000;
 const SAMPLE_RATE = 24000;
 const FRAME_MS = 100;
@@ -40,6 +52,9 @@ const STORAGE = {
   onboarded: "grok-voice.onboarded",
   images: "grok-voice.toolImages",
   usage: "grok-voice.dailyUsage",
+  kokoroOn: "grok-voice.kokoroOn",
+  kokoroVoice: "grok-voice.kokoroVoice",
+  kokoroSpeed: "grok-voice.kokoroSpeed",
 };
 
 const IMAGE_RULES = [
@@ -923,6 +938,7 @@ class RealtimeSession {
       case "response.output_audio_transcript.done":
         this.app.transcript.finalize("assistant", msg.transcript);
         this._catchImageRefusal(msg.transcript);
+        this.app.maybeAutoRead(msg.transcript);
         break;
 
       case "response.output_audio.delta":
@@ -1064,7 +1080,7 @@ class TranscriptView {
     if (this.live[role]) return this.live[role];
     const el = document.createElement("article");
     el.className = `bubble ${role} interim`;
-    el.innerHTML = `<span class="who">${role === "user" ? "You" : "Grok"} · ${nowLabel()}</span><div class="body"></div>`;
+    el.innerHTML = `<div class="bubble-head"><span class="who">${role === "user" ? "You" : "Grok"} · ${nowLabel()}</span><button type="button" class="read-aloud">Read</button></div><div class="body"></div>`;
     this.root.appendChild(el);
     this.live[role] = el;
     this._scroll();
@@ -1247,6 +1263,67 @@ class OrbViz {
 }
 
 // ---------------------------------------------------------------------------
+// Kokoro read-aloud — https://secondbrain-kokoro.fly.dev
+// ---------------------------------------------------------------------------
+
+class KokoroReader {
+  constructor() {
+    this.audio = new Audio();
+    this.objectUrl = "";
+    this.playing = false;
+    this.audio.addEventListener("ended", () => {
+      this.playing = false;
+    });
+  }
+
+  setVolume(value) {
+    this.audio.volume = Math.max(0, Math.min(1, value));
+  }
+
+  setMuted(muted) {
+    this.audio.muted = muted;
+  }
+
+  stop() {
+    this.audio.pause();
+    this.audio.removeAttribute("src");
+    this.playing = false;
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = "";
+    }
+  }
+
+  async speak(text, voice, speed) {
+    const clean = String(text || "").trim();
+    if (!clean) return { error: "Nothing to read." };
+
+    this.stop();
+    const response = await fetch(`${KOKORO_BASE}/api/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: clean.slice(0, 5000),
+        voice: voice || "af_heart",
+        speed: Number(speed) || 1,
+      }),
+    });
+
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new Error(raw.slice(0, 180) || `Kokoro ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    this.objectUrl = URL.createObjectURL(blob);
+    this.audio.src = this.objectUrl;
+    this.playing = true;
+    await this.audio.play();
+    return { ok: true };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -1264,6 +1341,7 @@ class App {
     this.session = new RealtimeSession(this);
     this.transcript = new TranscriptView($("transcript"));
     this.usage = new DailyUsage(STORAGE.usage);
+    this.kokoro = new KokoroReader();
     this.viz = new OrbViz($("viz"));
     this.mic = new MicCapture({
       onFrame: (b64) => this.session.appendAudio(b64),
@@ -1589,15 +1667,74 @@ class App {
     if (typeof dialog.showModal === "function") dialog.showModal();
   }
 
+  fillKokoroVoices(list) {
+    const select = $("kokoro-voice");
+    const previous = load(STORAGE.kokoroVoice, "af_heart");
+    select.innerHTML = "";
+    list.forEach((voice) => {
+      const opt = document.createElement("option");
+      opt.value = voice.id;
+      opt.textContent = voice.name;
+      select.appendChild(opt);
+    });
+    select.value = previous;
+    if (!select.value && list[0]) select.value = list[0].id;
+  }
+
+  async loadKokoroVoices() {
+    try {
+      const response = await fetch(`${KOKORO_BASE}/voices`);
+      if (!response.ok) throw new Error(`voices ${response.status}`);
+      const data = await response.json();
+      const raw = data.voices || data;
+      const list = Object.keys(raw).map((id) => ({
+        id,
+        name: (raw[id] && (raw[id].name || raw[id].Name)) || id,
+      }));
+      if (list.length) this.fillKokoroVoices(list);
+    } catch (err) {
+      console.warn("Kokoro /voices failed, using built-in list:", err);
+    }
+  }
+
+  async readAloud(text) {
+    const clean = String(text || "").trim();
+    if (!clean) {
+      this.toast("Nothing to read.");
+      return;
+    }
+    this.speaker.stop();
+    try {
+      await this.kokoro.speak(clean, $("kokoro-voice").value, $("kokoro-speed").value);
+    } catch (err) {
+      this.toast(`Read aloud failed: ${err.message || err}`);
+    }
+  }
+
+  maybeAutoRead(text) {
+    if (!$("kokoro-on").checked) return;
+    const clean = String(text || "").trim();
+    if (!clean) return;
+    this.readAloud(clean);
+  }
+
+  readLast() {
+    const bubbles = $("transcript").querySelectorAll(".bubble:not(.tool):not(.image) .body");
+    const last = bubbles[bubbles.length - 1];
+    this.readAloud(last ? last.textContent : "");
+  }
+
   applyVolume(percent) {
     const value = Number(percent);
     this.speaker.setVolume(value / 100);
+    this.kokoro.setVolume(value / 100);
     $("volume-readout").textContent = `${value}%`;
     save(STORAGE.volume, String(value));
   }
 
   applySpeakerMute(muted) {
     this.speaker.setMuted(muted);
+    this.kokoro.setMuted(muted);
     $("mute-btn").setAttribute("aria-pressed", String(muted));
     $("mute-label").textContent = muted ? "Unmute" : "Mute";
     $("mute-icon").textContent = muted ? "🔇" : "🔊";
@@ -1630,6 +1767,9 @@ class App {
     save(STORAGE.x, String($("tool-x").checked));
     save(STORAGE.images, String($("tool-images").checked));
     save(STORAGE.greeting, String($("greeting").checked));
+    save(STORAGE.kokoroOn, String($("kokoro-on").checked));
+    save(STORAGE.kokoroVoice, $("kokoro-voice").value);
+    save(STORAGE.kokoroSpeed, $("kokoro-speed").value);
   }
 
   restore() {
@@ -1652,7 +1792,12 @@ class App {
     $("tool-x").checked = load(STORAGE.x, "true") === "true";
     $("tool-images").checked = load(STORAGE.images, "true") === "true";
     $("greeting").checked = load(STORAGE.greeting, "true") === "true";
+    $("kokoro-on").checked = load(STORAGE.kokoroOn, "false") === "true";
+    $("kokoro-speed").value = load(STORAGE.kokoroSpeed, "1");
+    $("kokoro-speed-readout").textContent = `${Number($("kokoro-speed").value).toFixed(2)}×`;
     $("app-version").textContent = `v${APP_VERSION}`;
+    this.fillKokoroVoices(KOKORO_VOICES_FALLBACK);
+    this.loadKokoroVoices();
     this.renderUsage();
     this.renderSessionTimer();
     $("volume").value = load(STORAGE.volume, "90");
@@ -1714,13 +1859,18 @@ class App {
       this.toast("API key removed from this browser.");
     });
 
-    ["voice", "instructions", "vad-threshold", "silence-ms", "tool-web", "tool-x", "tool-images", "greeting"].forEach((id) => {
+    ["voice", "instructions", "vad-threshold", "silence-ms", "tool-web", "tool-x", "tool-images", "greeting", "kokoro-on", "kokoro-voice", "kokoro-speed"].forEach((id) => {
       $(id).addEventListener("change", () => {
         this.persistSettings();
         if (this.active && this.session.sessionReady) this.session._configureSession();
       });
     });
 
+    $("kokoro-speed").addEventListener("input", (event) => {
+      $("kokoro-speed-readout").textContent = `${Number(event.target.value).toFixed(2)}×`;
+    });
+    $("read-last").addEventListener("click", () => this.readLast());
+    $("stop-read").addEventListener("click", () => this.kokoro.stop());
     $("clear-transcript").addEventListener("click", () => this.transcript.clear());
     $("reset-queries").addEventListener("click", () => {
       this.usage.reset();
@@ -1729,6 +1879,13 @@ class App {
     });
 
     $("transcript").addEventListener("click", (event) => {
+      const readBtn = event.target.closest(".read-aloud");
+      if (readBtn) {
+        const bubble = readBtn.closest(".bubble");
+        const text = bubble ? bubble.querySelector(".body").textContent : "";
+        this.readAloud(text);
+        return;
+      }
       const thumb = event.target.closest("button.thumb");
       if (!thumb) return;
       this.openLightbox(thumb.dataset.src, thumb.dataset.caption);

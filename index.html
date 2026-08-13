@@ -21,7 +21,7 @@
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <div class="brand-copy">
-          <h1>Grok Voice <span class="version" id="app-version">v1.4.0</span></h1>
+          <h1>Grok Voice <span class="version" id="app-version">v1.5.0</span></h1>
           <p>Always-listening speech-to-speech</p>
         </div>
       </div>
@@ -92,13 +92,23 @@
             <input type="checkbox" id="tool-images" checked />
             <span>Images</span>
           </label>
+          <label class="toggle">
+            <input type="checkbox" id="kokoro-on" />
+            <span>Read aloud</span>
+          </label>
+          <label for="kokoro-voice">Kokoro</label>
+          <select id="kokoro-voice"></select>
         </div>
       </section>
 
       <section class="transcript-panel" aria-label="Conversation transcript">
         <div class="transcript-head">
           <h2>Transcript</h2>
-          <button type="button" class="text-btn" id="clear-transcript">Clear</button>
+          <div class="transcript-actions">
+            <button type="button" class="text-btn" id="read-last">Read last</button>
+            <button type="button" class="text-btn" id="stop-read">Stop read</button>
+            <button type="button" class="text-btn" id="clear-transcript">Clear</button>
+          </div>
         </div>
         <div class="transcript" id="transcript" aria-live="polite"></div>
         <form class="composer" id="composer">
@@ -145,6 +155,12 @@
         <label class="toggle block">
           <input type="checkbox" id="greeting" checked />
           <span>Speak a short greeting when a session starts</span>
+        </label>
+
+        <label class="field">
+          <span>Kokoro read-aloud speed <em id="kokoro-speed-readout">1.00×</em></span>
+          <input type="range" id="kokoro-speed" min="0.5" max="2" step="0.05" value="1" />
+          <small>Uses <a href="https://secondbrain-kokoro.fly.dev/voices" target="_blank" rel="noopener noreferrer">secondbrain-kokoro</a> to speak transcript text.</small>
         </label>
 
         <div class="field usage-field">
